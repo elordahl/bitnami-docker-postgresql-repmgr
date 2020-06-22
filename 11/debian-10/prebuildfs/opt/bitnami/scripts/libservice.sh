@@ -71,7 +71,7 @@ stop_service_using_pid() {
         counter=$((counter - 1))
     done
 
-    is_service_running "$pid" && echo "Unable to stop pid:$pid in $timeout_seconds seconds"
+    is_service_running "$pid" && echo "Unable to stop pid:$pid in $timeout_seconds seconds" || return
 }
 
 ########################
