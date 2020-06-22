@@ -61,11 +61,17 @@ stop_service_using_pid() {
         kill "$pid"
     fi
 
+    # try to confirm pid is not running
     local counter=10
+    local delay_seconds=1
+    local timeout_seconds=$((delay_seconds * counter))
+
     while [[ "$counter" -ne 0 ]] && is_service_running "$pid"; do
-        sleep 1
+        sleep $delay_seconds
         counter=$((counter - 1))
     done
+
+    is_service_running "$pid" && echo "Unable to stop pid:$pid in $timeout_seconds seconds"
 }
 
 ########################

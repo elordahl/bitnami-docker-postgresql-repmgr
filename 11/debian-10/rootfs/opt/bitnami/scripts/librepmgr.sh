@@ -358,6 +358,25 @@ repmgr_create_repmgr_user() {
     echo "ALTER USER ${REPMGR_USERNAME} SET search_path TO repmgr, \"\$user\", public;" | postgresql_execute "" "postgres" "$postgres_password"
 }
 
+# check that appropriate db and user exist in db
+is_repmgr_db_ready(){
+    local postgres_password="$POSTGRESQL_PASSWORD"
+    [[ "$POSTGRESQL_USERNAME" != "postgres" ]] && [[ -n "$POSTGRESQL_POSTGRES_PASSWORD" ]] && postgres_password="$POSTGRESQL_POSTGRES_PASSWORD"
+
+    local user_query="SELECT 1 FROM pg_roles WHERE rolname='$REPMGR_USERNAME'"
+    local db_query="SELECT count(datname) FROM pg_catalog.pg_database WHERE lower(datname) = lower('$REPMGR_DATABASE')"
+
+    user_exists="$(echo "$user_query" | postgresql_execute "" "postgres" "$postgres_password" "" "" "-tA")"
+    db_exists="$(echo "$db_query" | postgresql_execute "" "postgres" "$postgres_password" "" "" "-tA")"
+
+    is_boolean_yes "$user_exists" || echo "User '$REPMGR_USERNAME' doesnt exist"
+    is_boolean_yes "$db_exists" || echo "DB '$REPMGR_DATABASE' doesnt exist"
+
+    is_boolean_yes "$user_exists" && is_boolean_yes "$db_exists" && return
+
+    false
+}
+
 ########################
 # Creates the repmgr database
 # Globals:
@@ -566,6 +585,17 @@ repmgr_rewind() {
     repmgr_clone_primary
 }
 
+## check for existence of file, which indicate a prior
+# registration failed or didnt complete. This is likely
+# due to db shutting down and rejecting new connections
+is_repmgr_initialized(){
+  if [[ -e "${POSTGRESQL_DATA_DIR}/.repmgr-init-progress" ]]; then
+    false
+  else
+    true
+  fi
+}
+
 ########################
 # Register a node as primary
 # Globals:
@@ -577,9 +607,17 @@ repmgr_rewind() {
 #########################
 repmgr_register_primary() {
     repmgr_info "Registering Primary..."
-    local -r flags=("-f" "$REPMGR_CONF_FILE" "master" "register" "--force")
 
-    debug_execute "${REPMGR_BIN_DIR}/repmgr" "${flags[@]}"
+    local INIT_FILE=${POSTGRESQL_DATA_DIR}/.repmgr-init-progress
+    local -r flags=("-f" "$REPMGR_CONF_FILE" "master" "register" "--force")
+    echo false > ${INIT_FILE}
+
+    # make a few attempts since if db is shutting down, this will fail
+    for i in {1..5}; do
+       debug_execute "${REPMGR_BIN_DIR}/repmgr" "${flags[@]}" && rm -f ${INIT_FILE} && break || sleep $i
+    done
+
+    repmgr_info "Completed Primary Registration."
 }
 
 ########################
@@ -662,14 +700,37 @@ repmgr_initialize() {
     if [[ "$REPMGR_ROLE" = "primary" ]]; then
         if is_boolean_yes "$POSTGRESQL_FIRST_BOOT"; then
             postgresql_start_bg
-            repmgr_create_repmgr_user
-            repmgr_create_repmgr_db
-            # Restart PostgreSQL
-            postgresql_stop
-            postgresql_start_bg
-            repmgr_register_primary
+
+            # create repmgr db & user havent been created
+            # might be a useless check, considering
+            # it's in the first-boot clock
+            if ! is_repmgr_db_ready; then
+                repmgr_create_repmgr_user
+                repmgr_create_repmgr_db
+            fi
+
+            # stopping pqsl seems to trigger restart of node
+            # so not sure why we're stopping & starting
+            # could also be that end of script stops script via trap
+
+
+
+            # repmgr_register_primate will fail first time
+            # tell us that we're initialized
+
+            #repmgr_register_primary ## could attempt to register, but
+            # it doesnt work --- just create this file instead
+            touch ${POSTGRESQL_DATA_DIR}/.repmgr-init-progress
+
             # Allow running custom initialization scripts
             postgresql_custom_init_scripts
+
+        # now that repmgr db/user exist AND not first boot,
+        # register primary
+        elif ! is_repmgr_initialized; then
+            postgresql_start_bg
+            repmgr_register_primary
+
         elif is_boolean_yes "$REPMGR_UPGRADE_EXTENSION"; then
             # Upgrade repmgr extension
             postgresql_start_bg
