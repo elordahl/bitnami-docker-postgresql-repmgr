@@ -709,14 +709,14 @@ repmgr_initialize() {
                 repmgr_create_repmgr_db
             fi
 
-            # stopping pqsl seems to trigger restart of node
-            # so not sure why we're stopping & starting
-            # could also be that end of script stops script via trap
-
-
-
-            # repmgr_register_primate will fail first time
-            # tell us that we're initialized
+            # repmgr_register_primary will fail first time
+            # because it cannot connect to the db
+            # it seems the db is not being shutdown properly during the initial
+            # boot, causing the registration to fail. the entrypoint will finish
+            # setup.sh, and then try to invoke run.sh, which will fail since
+            # registration has not taken place.  this failure will restart the pod
+            # and trigger this hack which attempts registrations
+            # during subsequent boot
 
             #repmgr_register_primary ## could attempt to register, but
             # it doesnt work --- just create this file instead
